@@ -24,7 +24,7 @@
  ##:::: ##: ##:::: ##: ##::::::: ##::::::: ##:::: ##: ##: ##: ##:::: ##:.:: ##: ##.... ##: ##:. ###:
  ##:::: ##:. #######:: ########: ########:. #######::. ###. ###::::: ##:::: ##: ##:::: ##: ##::. ##:
 ..:::::..:::.......:::........::........:::.......::::...::...::::::..:::::..::..:::::..::..::::..::
-                                                                                    
+```                                                                                    
                                  Process Hollowing in C++ (x86 / x64)         
                                     Process PE Image Replacement
                                  Original Author: https://github.com/adamhlt/Process-Hollowing
@@ -92,4 +92,3 @@ Hollowman.exe C:\Payloads\HiWorld.exe C:\Windows\System32\cmd.exe
 ## 🔗 License
 
 Distributed under the MIT License. See \`LICENSE\` for details.
-
