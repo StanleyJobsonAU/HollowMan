@@ -1,0 +1,6 @@
+﻿C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Microsoft\VC\v170\Microsoft.CppBuild.targets(1133,5): warning MSB4211: The property "GetTargetPathDependsOn" is being set to a value for the first time, but it was already consumed at "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\Microsoft.Common.CurrentVersion.targets (2244,5)".
+  Process_Hollowing.cpp
+C:\Users\Luke\source\repos\Process-Hollowing-x64\Source\Process Hollowing\Process_Hollowing.cpp(481,55): warning C4244: 'initializing': conversion from 'DWORD64' to 'DWORD', possible loss of data
+C:\Users\Luke\source\repos\Process-Hollowing-x64\Source\Process Hollowing\Process_Hollowing.cpp(481,29): warning C4244: 'initializing': conversion from 'DWORD64' to 'const DWORD', possible loss of data
+C:\Users\Luke\source\repos\Process-Hollowing-x64\Source\Process Hollowing\Process_Hollowing.cpp(483,57): warning C4244: '=': conversion from 'DWORD64' to 'DWORD', possible loss of data
+  Process Hollowing.vcxproj -> C:\Users\Luke\Source\Repos\Process-Hollowing-x64\Source\x64\Debug\runpe.exe

